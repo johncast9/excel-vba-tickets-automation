@@ -1,0 +1,329 @@
+Option Explicit
+
+Private Const SHEET_SOURCE As String = "Hoja1"
+Private Const SHEET_CATALOG_STATUS As String = "Catálogo para estatus"
+Private Const SHEET_CATALOG_1 As String = "Catálogo 1"
+Private Const SHEET_NEW_CRITERIA As String = "Nuevo Criterio"
+Private Const SHEET_ADVA As String = "AdvaGestión"
+Private Const SHEET_OUTPUT As String = "BaseTickets"
+
+Private Const FIRST_DATA_ROW As Long = 2
+
+Private Const COL_FILTER As String = "F"
+Private Const COL_STATUS As String = "M"
+Private Const COL_DATE_SOURCE As String = "AD"
+Private Const COL_DATE_REFERENCE As String = "AR"
+Private Const COL_DATE_FINAL As String = "AS"
+Private Const COL_TIME_FINAL As String = "AU"
+
+Public Sub CrearBaseTickets()
+
+    Dim wsSource As Worksheet
+    Dim wsOutput As Worksheet
+    Dim wsCatalogStatus As Worksheet
+    Dim statusMap As Object
+
+    Dim lastRow As Long
+    Dim i As Long
+    Dim j As Long
+    Dim startTime As Double
+    Dim elapsedTime As Double
+
+    Dim sourceValue As Variant
+    Dim statusValue As String
+    Dim dateValue As Variant
+    Dim arr As Variant
+    Dim rowsToDelete() As Long
+    Dim deleteCount As Long
+    Dim lastReferenceDate As Variant
+
+    Dim colDate As Long
+    Dim colTime As Long
+    Dim colReference As Long
+    Dim colNaturalDays As Long
+
+    On Error GoTo ManejoError
+    startTime = Timer
+
+    PrepararExcel False
+
+    Set wsSource = ThisWorkbook.Worksheets(SHEET_SOURCE)
+    Set wsCatalogStatus = ThisWorkbook.Worksheets(SHEET_CATALOG_STATUS)
+    Set wsOutput = ObtenerOCrearHoja(SHEET_OUTPUT)
+
+    wsSource.UsedRange.Copy wsOutput.Range("A1")
+    Application.CutCopyMode = False
+
+    lastRow = wsOutput.Cells(wsOutput.Rows.Count, "A").End(xlUp).Row
+
+    Call CompletarFechaSiVacia(wsOutput, lastRow, COL_DATE_SOURCE, "AU")
+    Call ReordenarColumnasBase(wsOutput)
+    Call LimpiarColumnasTexto(wsOutput, lastRow, Array(5, 6, 7, 8))
+    Call FiltrarYEliminarFilas(wsOutput, lastRow, COL_FILTER)
+
+    lastRow = wsOutput.Cells(wsOutput.Rows.Count, "A").End(xlUp).Row
+
+    Set statusMap = CrearMapaEstatus(wsCatalogStatus)
+    Call ReemplazarEstatus(wsOutput, lastRow, statusMap)
+
+    wsOutput.Range(COL_DATE_FINAL & "2:" & COL_DATE_FINAL & lastRow).NumberFormat = "dd/mm/yyyy"
+
+    lastReferenceDate = wsOutput.Cells(lastRow, COL_DATE_REFERENCE).Value
+    Call CompletarPendientes(wsOutput, lastRow, COL_STATUS, lastReferenceDate)
+
+    Call AgregarColumnasCalculadas(wsOutput, lastRow)
+
+    colDate = wsOutput.Range("AY1").Column
+    colTime = wsOutput.Range("AZ1").Column
+    colReference = wsOutput.Range("AS1").Column
+    colNaturalDays = wsOutput.Range("AU1").Column
+
+    Call FormatearYSepararFechaHora(wsOutput, lastRow, colDate, colTime, colReference, colNaturalDays)
+
+    wsOutput.Range("AU2:AU" & lastRow).Formula = "=ROUND(AS2-AR2,0)"
+    wsOutput.Range("AV2:AV" & lastRow).Formula = "=VLOOKUP(F2,'" & SHEET_CATALOG_1 & "'!E:G,3,0)"
+    wsOutput.Range("AW2:AW" & lastRow).Formula = "=VLOOKUP(H2,'" & SHEET_CATALOG_1 & "'!A:B,2,0)"
+    wsOutput.Range("AX2:AX" & lastRow).Formula = "=IF(AR2=AS2,0,NETWORKDAYS(AR2,AS2,'" & SHEET_CATALOG_1 & "'!$P$2:$P$50)-1)"
+
+    wsOutput.Range("BA2:BA" & lastRow).Formula = "=AV2&E2"
+    wsOutput.Range("BB2:BB" & lastRow).Formula = "=VLOOKUP(BA2,'" & SHEET_NEW_CRITERIA & "'!E:F,2,0)"
+    wsOutput.Range("BC2:BC" & lastRow).Formula = "=IF(AX2<=BB2,""Dentro"",IF(BB2+2>=AX2,""Riesgo"",""Fuera""))"
+
+    wsOutput.Columns("BD").Insert Shift:=xlToRight
+    wsOutput.Cells(1, 56).Value = "Adva/Gestión"
+    wsOutput.Range("BD2:BD" & lastRow).Formula = "=VLOOKUP(E2," & SHEET_ADVA & "!A:B,2,0)"
+
+    wsOutput.Columns("BE").Insert Shift:=xlToRight
+    wsOutput.Cells(1, 57).Value = "ChubbNet/SIS"
+    wsOutput.Range("BE2:BE" & lastRow).Formula = "=IFERROR(VLOOKUP(E2," & SHEET_ADVA & "!G:H,2,0),""Otros"")"
+
+    wsOutput.Columns("BF").Insert Shift:=xlToRight
+    wsOutput.Cells(1, 58).Value = "Otros"
+    wsOutput.Range("BF2:BF" & lastRow).Formula = "=IF(BE2=""Otros"",AW2,"""")"
+
+    wsOutput.Columns("BG").Insert Shift:=xlToRight
+    wsOutput.Cells(1, 59).Value = "Compañía"
+    wsOutput.Range("BG2:BG" & lastRow).Formula = "=IF(AV2=""Citi Banamex"",""Banamex"",IF(AV2=""Fianzas"",""Fianzas"",""Seguros""))"
+
+    elapsedTime = Timer - startTime
+
+    PrepararExcel True
+
+    MsgBox "Base de Tickets generada correctamente." & vbCrLf & _
+           "Filas procesadas: " & Format(lastRow - 1, "#,##0") & vbCrLf & _
+           "Tiempo transcurrido: " & Format(elapsedTime, "0.00") & " segundos", _
+           vbInformation, "Proceso finalizado"
+    Exit Sub
+
+ManejoError:
+    PrepararExcel True
+    MsgBox "Ocurrió un error: " & Err.Description, vbCritical, "Error"
+End Sub
+
+Private Sub PrepararExcel(ByVal activar As Boolean)
+    Application.ScreenUpdating = activar
+    Application.EnableEvents = activar
+    Application.DisplayStatusBar = activar
+    Application.Calculation = IIf(activar, xlCalculationAutomatic, xlCalculationManual)
+End Sub
+
+Private Function ObtenerOCrearHoja(ByVal nombreHoja As String) As Worksheet
+    Dim ws As Worksheet
+
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(nombreHoja)
+    On Error GoTo 0
+
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        ws.Name = nombreHoja
+    Else
+        ws.Cells.Clear
+    End If
+
+    Set ObtenerOCrearHoja = ws
+End Function
+
+Private Sub CompletarFechaSiVacia(ByVal ws As Worksheet, ByVal lastRow As Long, _
+                                  ByVal colDestino As String, ByVal colOrigen As String)
+    Dim i As Long
+
+    For i = FIRST_DATA_ROW To lastRow
+        If Len(Trim$(ws.Cells(i, colDestino).Value)) = 0 Then
+            ws.Cells(i, colDestino).Value = ws.Cells(i, colOrigen).Value
+        End If
+    Next i
+End Sub
+
+Private Sub ReordenarColumnasBase(ByVal ws As Worksheet)
+    Application.DisplayAlerts = False
+
+    ws.Columns("Q").Cut
+    ws.Columns("A").Insert Shift:=xlToRight
+
+    ws.Columns("AN").Cut
+    ws.Columns("AT").Insert Shift:=xlToRight
+
+    Application.CutCopyMode = False
+    Application.DisplayAlerts = True
+End Sub
+
+Private Sub LimpiarColumnasTexto(ByVal ws As Worksheet, ByVal lastRow As Long, ByVal columnas As Variant)
+    Dim j As Long
+    Dim i As Long
+    Dim arr As Variant
+
+    For j = LBound(columnas) To UBound(columnas)
+        arr = ws.Range(ws.Cells(FIRST_DATA_ROW, columnas(j)), ws.Cells(lastRow, columnas(j))).Value
+        For i = 1 To UBound(arr, 1)
+            arr(i, 1) = Trim$(CStr(arr(i, 1)))
+        Next i
+        ws.Range(ws.Cells(FIRST_DATA_ROW, columnas(j)), ws.Cells(lastRow, columnas(j))).Value = arr
+    Next j
+End Sub
+
+Private Sub FiltrarYEliminarFilas(ByVal ws As Worksheet, ByVal lastRow As Long, ByVal colLetra As String)
+    Dim arrData As Variant
+    Dim rowsToDelete() As Long
+    Dim deleteCount As Long
+    Dim i As Long
+    Dim valor As String
+
+    arrData = ws.Range(colLetra & FIRST_DATA_ROW & ":" & colLetra & lastRow).Value
+    ReDim rowsToDelete(1 To lastRow)
+    deleteCount = 0
+
+    For i = 1 To UBound(arrData, 1)
+        valor = CStr(arrData(i, 1))
+        If Not (Len(valor) >= 2 And IsNumeric(Left$(valor, 2)) And Val(Left$(valor, 2)) >= 0 And Val(Left$(valor, 2)) <= 25) Then
+            deleteCount = deleteCount + 1
+            rowsToDelete(deleteCount) = i + 1
+        End If
+    Next i
+
+    Application.DisplayAlerts = False
+    For i = deleteCount To 1 Step -1
+        ws.Rows(rowsToDelete(i)).Delete
+    Next i
+    Application.DisplayAlerts = True
+End Sub
+
+Private Function CrearMapaEstatus(ByVal wsCat As Worksheet) As Object
+    Dim dict As Object
+    Dim i As Long
+    Dim key As String
+
+    Set dict = CreateObject("Scripting.Dictionary")
+
+    For i = 2 To 9
+        key = Trim$(CStr(wsCat.Cells(i, 2).Value))
+        If Len(key) > 0 Then
+            dict(key) = wsCat.Cells(i, 3).Value
+        End If
+    Next i
+
+    Set CrearMapaEstatus = dict
+End Function
+
+Private Sub ReemplazarEstatus(ByVal ws As Worksheet, ByVal lastRow As Long, ByVal dict As Object)
+    Dim arr As Variant
+    Dim i As Long
+    Dim valor As String
+
+    arr = ws.Range("M2:M" & lastRow).Value
+
+    For i = 1 To UBound(arr, 1)
+        valor = Trim$(CStr(arr(i, 1)))
+        If dict.Exists(valor) Then
+            arr(i, 1) = dict(valor)
+        Else
+            arr(i, 1) = valor
+        End If
+    Next i
+
+    ws.Range("M2:M" & lastRow).Value = arr
+End Sub
+
+Private Sub CompletarPendientes(ByVal ws As Worksheet, ByVal lastRow As Long, ByVal colEstado As String, ByVal valorFecha As Variant)
+    Dim i As Long
+
+    For i = FIRST_DATA_ROW To lastRow
+        If ws.Cells(i, colEstado).Value = "Pendiente" Then
+            ws.Cells(i, 45).Value = valorFecha
+        End If
+    Next i
+End Sub
+
+Private Sub AgregarColumnasCalculadas(ByVal ws As Worksheet, ByVal lastRow As Long)
+    ws.Columns("AU").Insert Shift:=xlToRight
+    ws.Columns("AU").Insert Shift:=xlToRight
+    ws.Columns("AU").Insert Shift:=xlToRight
+    ws.Columns("AU").Insert Shift:=xlToRight
+
+    ws.Cells(1, 47).Value = "Días Naturales"
+    ws.Cells(1, 48).Value = "Célula final"
+    ws.Cells(1, 49).Value = "Categoría final"
+    ws.Cells(1, 50).Value = "Días Hábiles Excel"
+
+    ws.Columns("AZ").Insert Shift:=xlToRight
+    ws.Cells(1, 52).Value = "Hora de Cancelación"
+
+    ws.Columns("BA").Insert Shift:=xlToRight
+    ws.Cells(1, 53).Value = "Llave"
+
+    ws.Columns("BB").Insert Shift:=xlToRight
+    ws.Cells(1, 54).Value = "Rango"
+
+    ws.Columns("BC").Insert Shift:=xlToRight
+    ws.Cells(1, 55).Value = "SLA Nuevo Criterio"
+
+    ws.Columns(47).NumberFormat = "General"
+    ws.Columns(48).NumberFormat = "General"
+    ws.Columns(49).NumberFormat = "General"
+    ws.Columns(50).NumberFormat = "General"
+    ws.Columns(53).NumberFormat = "General"
+    ws.Columns(54).NumberFormat = "General"
+    ws.Columns(55).NumberFormat = "General"
+End Sub
+
+Private Sub FormatearYSepararFechaHora(ByVal ws As Worksheet, ByVal lastRow As Long, _
+                                       ByVal colFecha As Long, ByVal colHora As Long, _
+                                       ByVal colSolicitud As Long, ByVal colNatural As Long)
+
+    Dim arrFechas As Variant
+    Dim arrSolicitudes As Variant
+    Dim arrHoras() As Variant
+    Dim i As Long
+    Dim vFecha As Variant
+
+    ws.Columns(colFecha).NumberFormat = "dd/mm/yyyy"
+    ws.Columns(colHora).NumberFormat = "General"
+
+    arrFechas = ws.Range(ws.Cells(FIRST_DATA_ROW, colFecha), ws.Cells(lastRow, colFecha)).Value
+    arrSolicitudes = ws.Range(ws.Cells(FIRST_DATA_ROW, colSolicitud), ws.Cells(lastRow, colSolicitud)).Value
+    ReDim arrHoras(1 To UBound(arrFechas, 1), 1 To 1)
+
+    For i = 1 To UBound(arrFechas, 1)
+        vFecha = arrFechas(i, 1)
+
+        If Not IsEmpty(vFecha) Then
+            If IsDate(vFecha) Then
+                arrHoras(i, 1) = Format$(CDate(vFecha), "hh:mm:ss AM/PM")
+            Else
+                arrHoras(i, 1) = vbNullString
+            End If
+        Else
+            arrHoras(i, 1) = vbNullString
+        End If
+
+        If arrSolicitudes(i, 1) = vbNullString And arrFechas(i, 1) <> vbNullString Then
+            arrSolicitudes(i, 1) = arrFechas(i, 1)
+        End If
+    Next i
+
+    ws.Range(ws.Cells(FIRST_DATA_ROW, colHora), ws.Cells(lastRow, colHora)).Value = arrHoras
+    ws.Range(ws.Cells(FIRST_DATA_ROW, colSolicitud), ws.Cells(lastRow, colSolicitud)).Value = arrSolicitudes
+
+    ws.Columns(colSolicitud).NumberFormat = "dd/mm/yyyy"
+    ws.Columns(colNatural).NumberFormat = "General"
+End Sub

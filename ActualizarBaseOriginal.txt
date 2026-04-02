@@ -1,0 +1,219 @@
+Option Explicit
+
+Private Const COL_ID As String = "Q"
+Private Const FILA_INICIO As Long = 2
+Private Const COL_FECHA_FORMATO As String = "AU"
+
+Sub ActualizarBase()
+
+    Dim tInicio As Double
+    tInicio = Timer
+
+    Dim rutaBase As String
+    rutaBase = ObtenerRutaBase()
+
+    Dim wsAcum As Worksheet
+    Dim wbCrudo As Workbook
+    Dim wsCrudo As Worksheet
+
+    Dim rutaArchivo As String
+    Dim esCSV As Boolean
+    Dim idReferencia As Variant
+    Dim celdaID As Range
+    Dim filaCorte As Long
+    Dim ultimaFilaCrudo As Long, ultimaColCrudo As Long, ultimaFilaAcum As Long
+    Dim datos As Variant
+    Dim filasInsertadas As Long
+    Dim colIDnum As Long
+    Dim ultimoID As Variant
+    Dim tiempo As Double
+    Dim colFechaNum As Long
+
+    On Error GoTo ManejoError
+
+    Set wsAcum = ThisWorkbook.Worksheets(1)
+
+    rutaArchivo = ArchivoMasReciente(rutaBase)
+    If rutaArchivo = "" Then
+        MsgBox "No se encontró ningún archivo compatible en la carpeta configurada.", vbExclamation
+        Exit Sub
+    End If
+
+    esCSV = (LCase$(Right$(rutaArchivo, 4)) = ".csv")
+
+    If MsgBox("¿Quieres actualizar la base en crudo?", vbYesNo + vbQuestion, "Confirmación") = vbNo Then
+        Exit Sub
+    End If
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+
+    If esCSV Then
+        Set wbCrudo = AbrirCSVConFechas(rutaArchivo)
+    Else
+        Set wbCrudo = Workbooks.Open(rutaArchivo, ReadOnly:=True)
+    End If
+
+    Set wsCrudo = wbCrudo.Worksheets(1)
+
+    ultimaFilaCrudo = wsCrudo.Cells(wsCrudo.Rows.Count, COL_ID).End(xlUp).Row
+    ultimaColCrudo = wsCrudo.Cells(1, wsCrudo.Columns.Count).End(xlToLeft).Column
+    colIDnum = wsCrudo.Columns(COL_ID).Column
+
+    wsCrudo.Sort.SortFields.Clear
+    wsCrudo.Sort.SortFields.Add Key:=wsCrudo.Columns(colIDnum), _
+        SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+
+    With wsCrudo.Sort
+        .SetRange wsCrudo.Range(wsCrudo.Cells(FILA_INICIO, 1), wsCrudo.Cells(ultimaFilaCrudo, ultimaColCrudo))
+        .Header = xlNo
+        .Apply
+    End With
+
+    idReferencia = wsCrudo.Cells(FILA_INICIO, colIDnum).Value
+
+    Set celdaID = wsAcum.Range(COL_ID & FILA_INICIO & ":" & COL_ID & wsAcum.Rows.Count).Find( _
+        What:=CStr(idReferencia), LookAt:=xlWhole, LookIn:=xlValues)
+
+    If celdaID Is Nothing Then
+        MsgBox "No se encontró el ID de referencia en la base destino.", vbExclamation
+        GoTo SalirSeguro
+    End If
+
+    filaCorte = celdaID.Row
+
+    ultimaFilaAcum = wsAcum.Cells(wsAcum.Rows.Count, COL_ID).End(xlUp).Row
+    If filaCorte <= ultimaFilaAcum Then
+        wsAcum.Rows(filaCorte & ":" & ultimaFilaAcum).Delete
+    End If
+
+    ultimaFilaCrudo = wsCrudo.Cells(wsCrudo.Rows.Count, COL_ID).End(xlUp).Row
+    ultimaColCrudo = wsCrudo.Cells(1, wsCrudo.Columns.Count).End(xlToLeft).Column
+
+    datos = wsCrudo.Range(wsCrudo.Cells(FILA_INICIO, 1), wsCrudo.Cells(ultimaFilaCrudo, ultimaColCrudo)).Value
+    filasInsertadas = UBound(datos, 1)
+
+    wsAcum.Cells(filaCorte, 1).Resize(filasInsertadas, ultimaColCrudo).Value = datos
+
+    wsAcum.Rows(FILA_INICIO).Copy
+    wsAcum.Rows(filaCorte & ":" & filaCorte + filasInsertadas - 1).PasteSpecial xlPasteFormats
+    Application.CutCopyMode = False
+
+    colFechaNum = wsAcum.Columns(COL_FECHA_FORMATO).Column
+    wsAcum.Range(wsAcum.Cells(filaCorte, colFechaNum), wsAcum.Cells(filaCorte + filasInsertadas - 1, colFechaNum)).NumberFormat = "dd/mm/yyyy"
+
+    ultimoID = wsAcum.Cells(filaCorte + filasInsertadas - 1, colIDnum).Value
+
+    wbCrudo.Close SaveChanges:=False
+    ThisWorkbook.Save
+
+    tiempo = Round(Timer - tInicio, 2)
+
+    MsgBox "Base actualizada correctamente." & vbCrLf & vbCrLf & _
+           "ID de referencia: " & idReferencia & vbCrLf & _
+           "Filas insertadas: " & filasInsertadas & vbCrLf & _
+           "Último ID insertado: " & ultimoID & vbCrLf & _
+           "Tiempo de ejecución: " & tiempo & " segundos", vbInformation, "Proceso finalizado"
+
+SalirSeguro:
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    Exit Sub
+
+ManejoError:
+    On Error Resume Next
+    If Not wbCrudo Is Nothing Then wbCrudo.Close SaveChanges:=False
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    MsgBox "Ocurrió un error: " & Err.Description, vbCritical, "Error"
+End Sub
+
+Private Function ObtenerRutaBase() As String
+    Dim ruta As String
+
+    ' Opción 1: variable de entorno para evitar rutas sensibles en el código.
+    ruta = Environ$("RUTA_BASE_ARCHIVOS")
+
+    ' Opción 2: carpeta local junto al archivo Excel.
+    If Len(Trim$(ruta)) = 0 Then
+        ruta = ThisWorkbook.Path & Application.PathSeparator & "Zbase"
+    End If
+
+    If Right$(ruta, 1) <> Application.PathSeparator Then
+        ruta = ruta & Application.PathSeparator
+    End If
+
+    ObtenerRutaBase = ruta
+End Function
+
+Private Function ArchivoMasReciente(ByVal carpeta As String) As String
+    Dim archivo As String
+    Dim mejorArchivo As String
+    Dim fechaMejor As Date
+    Dim fechaActual As Date
+
+    If Right$(carpeta, 1) <> Application.PathSeparator Then
+        carpeta = carpeta & Application.PathSeparator
+    End If
+
+    archivo = Dir(carpeta & "*.*")
+
+    Do While archivo <> ""
+        If archivo Like "*.xls*" Or archivo Like "*.csv" Then
+            fechaActual = FileDateTime(carpeta & archivo)
+            If fechaActual > fechaMejor Then
+                fechaMejor = fechaActual
+                mejorArchivo = carpeta & archivo
+            End If
+        End If
+        archivo = Dir
+    Loop
+
+    ArchivoMasReciente = mejorArchivo
+End Function
+
+Private Function DetectarSeparadorCSV(ByVal rutaCSV As String) As String
+    Dim linea As String
+    Dim f As Integer
+    Dim nComa As Long, nPuntoComa As Long, nTab As Long
+
+    f = FreeFile
+    Open rutaCSV For Input As #f
+    Line Input #f, linea
+    Close #f
+
+    nComa = Len(linea) - Len(Replace(linea, ",", ""))
+    nPuntoComa = Len(linea) - Len(Replace(linea, ";", ""))
+    nTab = Len(linea) - Len(Replace(linea, Chr(9), ""))
+
+    If nPuntoComa >= nComa And nPuntoComa >= nTab Then
+        DetectarSeparadorCSV = ";"
+    ElseIf nTab >= nComa Then
+        DetectarSeparadorCSV = Chr(9)
+    Else
+        DetectarSeparadorCSV = ","
+    End If
+End Function
+
+Private Function AbrirCSVConFechas(ByVal rutaCSV As String) As Workbook
+    Dim sep As String
+    sep = DetectarSeparadorCSV(rutaCSV)
+
+    Workbooks.OpenText Filename:=rutaCSV, _
+        Origin:=65001, _
+        StartRow:=1, _
+        DataType:=xlDelimited, _
+        TextQualifier:=xlDoubleQuote, _
+        ConsecutiveDelimiter:=False, _
+        Tab:=(sep = Chr(9)), _
+        Semicolon:=(sep = ";"), _
+        Comma:=(sep = ","), _
+        Space:=False, _
+        Other:=False, _
+        Local:=True
+
+    Set AbrirCSVConFechas = ActiveWorkbook
+End Function

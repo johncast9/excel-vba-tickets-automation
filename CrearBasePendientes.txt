@@ -1,0 +1,79 @@
+Option Explicit
+
+Private Const SHEET_BASE As String = "BaseTickets"
+Private Const SHEET_PENDIENTES As String = "BasePendientes"
+Private Const COL_ESTADO As Long = 13
+Private Const FILA_CABECERA As Long = 1
+Private Const FILA_DATOS As Long = 2
+
+Public Sub CrearBasePendientes()
+
+    Dim wb As Workbook
+    Dim wsBase As Worksheet
+    Dim wsPend As Worksheet
+    Dim lastRowBase As Long
+    Dim lastRowPend As Long
+    Dim lastColBase As Long
+    Dim i As Long
+
+    On Error GoTo ManejoError
+
+    Set wb = ThisWorkbook
+    Set wsBase = wb.Worksheets(SHEET_BASE)
+    Set wsPend = ObtenerOCrearHoja(wb, SHEET_PENDIENTES)
+
+    PrepararExcel False
+
+    lastColBase = wsBase.Cells(FILA_CABECERA, wsBase.Columns.Count).End(xlToLeft).Column
+    lastRowBase = wsBase.Cells(wsBase.Rows.Count, "A").End(xlUp).Row
+
+    If lastRowBase < FILA_DATOS Then
+        MsgBox "No hay datos para procesar.", vbExclamation, "BasePendientes"
+        GoTo SalidaSegura
+    End If
+
+    If wsPend.Cells(1, 1).Value = vbNullString Then
+        wsPend.Range("A1").Resize(1, lastColBase).Value = wsBase.Range("A1").Resize(1, lastColBase).Value
+    End If
+
+    lastRowPend = wsPend.Cells(wsPend.Rows.Count, "A").End(xlUp).Row
+    If lastRowPend < FILA_CABECERA Then lastRowPend = FILA_CABECERA
+
+    For i = FILA_DATOS To lastRowBase
+        If Trim$(CStr(wsBase.Cells(i, COL_ESTADO).Value)) = "Pendiente" Then
+            lastRowPend = lastRowPend + 1
+            wsPend.Cells(lastRowPend, 1).Resize(1, lastColBase).Value = _
+                wsBase.Cells(i, 1).Resize(1, lastColBase).Value
+        End If
+    Next i
+
+    MsgBox "BasePendientes actualizada con éxito.", vbInformation, "BasePendientes"
+
+SalidaSegura:
+    PrepararExcel True
+    Exit Sub
+
+ManejoError:
+    PrepararExcel True
+    MsgBox "Ocurrió un error: " & Err.Description, vbCritical, "Error"
+End Sub
+
+Private Function ObtenerOCrearHoja(ByVal wb As Workbook, ByVal nombreHoja As String) As Worksheet
+    Dim ws As Worksheet
+
+    On Error Resume Next
+    Set ws = wb.Worksheets(nombreHoja)
+    On Error GoTo 0
+
+    If ws Is Nothing Then
+        Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+        ws.Name = nombreHoja
+    End If
+
+    Set ObtenerOCrearHoja = ws
+End Function
+
+Private Sub PrepararExcel(ByVal activar As Boolean)
+    Application.ScreenUpdating = activar
+    Application.EnableEvents = activar
+End Sub
