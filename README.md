@@ -1,4 +1,4 @@
-# excel-vba-tickets-automation
+# excel-vba-tickets-automatizacion
 Automatización de procesamiento de tickets en VBA para análisis en Power BI
 
 # Automatización de Tickets en Excel (VBA)
