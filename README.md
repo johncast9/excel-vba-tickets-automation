@@ -19,7 +19,7 @@ Este proyecto automatiza el procesamiento de una base de tickets en Excel usando
 
 ## Flujo del proceso
 1. Actualizar base acumulada
-2. Crear base limpia
+2. Crear base de tickets limpia
 3. Generar pendientes
 
 ## Uso
